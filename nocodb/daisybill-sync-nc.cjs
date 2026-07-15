@@ -1,7 +1,11 @@
 'use strict';
 /**
- * daisybill-sync-nc.cjs — marks NocoDB claims as "Sent" if a matching
+ * daisybill-sync-nc.cjs — marks NocoDB claims as "Billed" if a matching
  * bill exists in DaisyBill with a submitted/processed status.
+ *
+ * Match key: normalized patient name + Date of Service.
+ * Names are normalized to strip annotations like "(LEFT FOOT)" or
+ * "- LEFT ANKLE" that billers add in NocoDB.
  *
  * Usage:
  *   node nocodb/daisybill-sync-nc.cjs           → dry run
@@ -18,7 +22,14 @@ const BP_ID   = 4204;
 const PAGE_SIZE = 25;
 
 const SENT_STATUSES = new Set(['processed', 'submitted', 'denied', 'paid', 'appealed', 'forwarded']);
-const norm = (n) => (n || '').replace(/\s+/g, ' ').trim().toLowerCase();
+// strip biller annotations: "(LEFT FOOT)", "- LEFT ANKLE", "(WC)", middle initials
+const norm = (n) => (n || '')
+  .replace(/\(.*?\)/g, ' ')
+  .replace(/\s+[-–]\s+.*$/, ' ')
+  .replace(/\b[A-Z]\.\s*/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .toLowerCase();
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function dbGet(path) {
@@ -93,7 +104,7 @@ async function main() {
   const updates = [];
   for (const row of claims) {
     const sub = (row['Submission Status'] || '').toLowerCase();
-    if (sub === 'sent' || sub === 'done') continue;
+    if (sub === 'billed' || sub === 'canceled') continue;
     const name = row['Patient Name'];
     const dos  = row['Date of Service'];
     if (!name || !dos) continue;
@@ -103,20 +114,20 @@ async function main() {
       console.log(`  ✓ ${row['Claim Number']} | ${name} | ${dos}`);
       updates.push({
         Id: row.Id,
-        'Submission Status': 'Sent',
+        'Submission Status': 'Billed',
         ...(match.statusUpdated ? { 'Submission Date': match.statusUpdated.slice(0, 10) } : {}),
       });
     }
   }
 
-  console.log(`\n${updates.length} claims to mark as "Sent"`);
+  console.log(`\n${updates.length} claims to mark as "Billed"`);
   if (!updates.length || DRY_RUN) {
     console.log(DRY_RUN ? 'Dry run done — re-run with --apply to write.' : 'Nothing to update.');
     return;
   }
 
   await nc.updateBatch(nc.CLAIMS, updates);
-  console.log(`✅ Done — ${updates.length} claims marked as "Sent"`);
+  console.log(`✅ Done — ${updates.length} claims marked as "Billed"`);
 }
 
 main().catch(e => { console.error('\n❌', e.message); process.exit(1); });
