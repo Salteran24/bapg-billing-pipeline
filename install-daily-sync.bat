@@ -8,7 +8,7 @@ set NODE_EXE=C:\Program Files\nodejs\node.exe
 echo Creating scheduled task: BAPG DrChrono Daily Sync...
 
 schtasks /create /tn "BAPG DrChrono Daily Sync" ^
-  /tr "\"%NODE_EXE%\" drchrono-sync.cjs" ^
+  /tr "\"%NODE_EXE%\" nocodb/drchrono-sync-nc.cjs" ^
   /sc daily /st 20:00 ^
   /sd 07/10/2026 ^
   /rl HIGHEST ^
@@ -21,7 +21,7 @@ if %ERRORLEVEL% == 0 (
   echo Working directory needs to be set - running fix...
 
   :: Use PowerShell to set the working directory since schtasks doesn't support it directly
-  powershell -Command "$action = New-ScheduledTaskAction -Execute '\"%NODE_EXE%\"' -Argument 'drchrono-sync.cjs' -WorkingDirectory '%SCRIPT_DIR%'; Set-ScheduledTask -TaskName 'BAPG DrChrono Daily Sync' -Action $action"
+  powershell -Command "$action = New-ScheduledTaskAction -Execute '\"%NODE_EXE%\"' -Argument 'nocodb/drchrono-sync-nc.cjs' -WorkingDirectory '%SCRIPT_DIR%'; Set-ScheduledTask -TaskName 'BAPG DrChrono Daily Sync' -Action $action"
 
   echo.
   echo Done! DrChrono will sync automatically every day at 8:00 PM.

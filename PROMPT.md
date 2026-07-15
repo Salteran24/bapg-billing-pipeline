@@ -81,6 +81,11 @@ View creation via API not supported — must use UI.
 F/U dates: 7 business days apart starting from Submission Date.
 Trigger: claim → "Billed" → run sync-ar-tracker.cjs --apply (runs hourly via Task Scheduler)
 
+## Scheduled tasks (Windows Task Scheduler)
+- BAPG DrChrono Daily Sync — nocodb/drchrono-sync-nc.cjs, daily 8:00 PM
+- BAPG-DaisyBill-Sync — nocodb/daisybill-sync-nc.cjs --apply, daily 7:30 PM
+- BAPG-AR-Tracker-Sync — nocodb/sync-ar-tracker.cjs --apply, hourly
+
 ### NocoDB users (all initial password: ProCare2026x)
 - teran@baosurgery.com (Owner)
 - cesar@procare-solutions.net (Editor)
