@@ -1,0 +1,24 @@
+{
+  "name": "superbill-pipeline",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "denial:setup": "node setup-matrix-room.cjs",
+    "denial:probe": "node probe-dexter-columns.cjs",
+    "denial:run": "node denial-notifier.cjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "docx": "^9.7.1",
+    "googleapis": "^144.0.0",
+    "pdf-parse": "^2.4.5"
+  },
+  "devDependencies": {
+    "pdfkit": "^0.19.1"
+  }
+}

@@ -1,0 +1,10 @@
+# Credentials & secrets — never commit these
+drchrono-config.json
+drchrono-tokens.json
+nocodb-config.json
+matrix-config.json
+denial-notifier-state.json
+
+# Runtime state
+*.log
+node_modules/
