@@ -87,20 +87,26 @@ async function main() {
     if (existingApptIds.has(apptId)) continue;
 
     let patient = {};
-    try { patient = await dcFetch(`/api/patients/${appt.patient}`, tokens); } catch {}
+    try { patient = await dcFetch(`/api/patients/${appt.patient}`, tokens); }
+    catch {
+      // retry once — a silent failure here leaves the claim without MRN/DOB
+      try { patient = await dcFetch(`/api/patients/${appt.patient}`, tokens); }
+      catch (e) { console.warn(`\n  ⚠ patient fetch failed for appt ${apptId}: ${e.message}`); }
+    }
 
     let lineItems = [];
     try { lineItems = await dcFetchAll('/api/line_items', { appointment: appt.id }, tokens); } catch {}
 
     const patientName = [patient.first_name, patient.last_name].filter(Boolean).join(' ') || `Patient #${appt.patient}`;
     const mrn  = patient.chart_id ? String(patient.chart_id) : null;
+    const dob  = patient.date_of_birth || null;
     const dos  = appt.date || appt.scheduled_time?.slice(0, 10) || null;
     const cpts = [...new Set(lineItems.map(li => li.code).filter(Boolean))];
     const icds = [...new Set(appt.icd10_codes || [])];
     const totalCharge = lineItems.reduce((s, li) => s + parseFloat(li.charge || 0), 0);
     const dosCompact  = dos ? dos.replace(/-/g, '') : null;
 
-    apptData.push({ apptId, patientName, mrn, dos, dosCompact, cpts, icds, totalCharge });
+    apptData.push({ apptId, patientName, mrn, dob, dos, dosCompact, cpts, icds, totalCharge });
   }
   console.log('');
 
@@ -134,6 +140,7 @@ async function main() {
     claimsToCreate.push({
       'Claim Number':     claimNum,
       'Patient Name':     d.patientName,
+      'Date of Birth':    d.dob || null,
       'Date of Service':  d.dos || null,
       'MRN':              d.mrn || '',
       'Insurer':          'Self-Pay',
