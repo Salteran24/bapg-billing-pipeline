@@ -1,4 +1,4 @@
-# BAPG Superbill Pipeline — Session Starter Prompt
+# BAPG Billing Pipeline — Session Starter Prompt
 
 Copy and paste the block below at the start of any new Claude session to restore full context instantly.
 
@@ -12,50 +12,52 @@ Here is the full context:
 
 ## What this project is
 
-A Node.js pipeline on Windows that:
-1. Pulls completed appointments + CPT/ICD-10 codes from DrChrono (EHR)
-2. Stores them in a NocoDB queue (self-hosted on DigitalOcean)
-3. Syncs submitted claims from DaisyBill (WC billing system) back to NocoDB
-4. Pushes CPT/ICD-10 data from NocoDB back into DrChrono to pre-fill CMS-1500s
-5. Billers work the queue in NocoDB (filter by Owner, mark Submission Status)
-6. Claims marked "Billed" auto-create AR Tracker records with 3 F/U dates
+A Node.js pipeline on Windows that automates WC billing:
+
+1. Pull completed appointments from DrChrono API → NocoDB Claims Tracker
+2. NocoDB checks DaisyBill to skip claims already submitted
+3. Billers work the queue in NocoDB (assign Owner, update Submission Status)
+4. Claims marked "Billed" auto-create AR Tracker records with 3 F/U dates (7 business days apart)
+5. AR team works follow-ups in AR Tracker
+
+Superbills are NOT part of this workflow. Airtable is legacy and fully replaced by NocoDB.
 
 ## Working directory
 C:\Users\Salte\OneDrive\Desktop\Clinica San Judas\Apps\superbill-pipeline\
 
-## Scripts
+## GitHub
+https://github.com/Salteran24/bapg-billing-pipeline (private)
+
+## Active scripts
 
 | Script | Purpose |
 |--------|---------|
 | `drchrono-auth.cjs` | One-time OAuth2 flow, saves drchrono-tokens.json |
-| `drchrono-sync.cjs` | DrChrono → Airtable (legacy; being migrated) |
-| `nocodb/drchrono-sync-nc.cjs` | DrChrono → NocoDB (new) |
+| `nocodb/drchrono-sync-nc.cjs` | DrChrono appointments → NocoDB Claims Tracker |
 | `nocodb/drchrono-billing-push.cjs` | NocoDB CPT/ICD-10 → DrChrono line items |
-| `daisybill-sync.cjs` | DaisyBill → Airtable (legacy) |
-| `nocodb/daisybill-sync-nc.cjs` | DaisyBill → NocoDB (new) |
+| `nocodb/daisybill-sync-nc.cjs` | DaisyBill submitted claims → NocoDB (dedup check) |
 | `nocodb/sync-ar-tracker.cjs` | Claims "Billed" → AR Tracker with F/U dates |
 | `nocodb/setup-ar-tracker.cjs` | One-time: adds columns to AR Tracker table |
-| `nocodb/migrate-from-airtable.cjs` | One-time Airtable → NocoDB migration (done) |
-| `nocodb/renumber-claims.cjs` | Re-assigns claim numbers in NocoDB |
 | `nocodb/nc-client.cjs` | Shared NocoDB v2 API helpers |
 | `nocodb/backfill-dob.cjs` | Fills DOB from DrChrono for all claims |
-| `process.cjs` | Watches superbill PDFs folder, parses, writes to Airtable |
-| `watch.cjs` | File watcher that calls process.cjs |
-| `backfill-insurer.cjs` | Fills insurer field from DrChrono insurance records |
+| `nocodb/renumber-claims.cjs` | Re-assigns claim numbers in NocoDB |
+| `watch.cjs` / `watch-nc.cjs` | File watcher (legacy — Airtable; migration pending) |
+| `matrix-notify.cjs` | Sends notifications to Element Matrix chat |
+| `install-ar-sync-task.bat` | Installs hourly Task Scheduler task for sync-ar-tracker |
 
 ## NocoDB
 
 - Self-hosted on DigitalOcean: http://137.184.211.133:3030
 - Domain (HTTPS): https://billing.procare-solutions.net (Caddy reverse proxy, auto SSL)
-- Config file: nocodb-config.json
+- Config file: nocodb-config.json (NOT committed — contains token)
 - token: nc_pat_E5nJ7bjHXofiEeF59l78M5zTYArQKAiUIYBuQC7g
 - projectId: p6dyfnvms4wa5ua
 - claimsTableId: mq54ly1tsuxof5q
 - arTableId: mygeowzobnati57
 
 NocoDB v2026.06.2 — uses v2 API for data operations.
-Column creation still uses v1: POST /api/v1/db/meta/tables/{tableId}/columns
-View creation via API not supported in this version — must use UI.
+Column creation uses v1: POST /api/v1/db/meta/tables/{tableId}/columns
+View creation via API not supported — must use UI.
 
 ### Claims Tracker fields
 - Claim Number: {YYYYMMDD}-{MRN} | {YYYYMMDD}-{LAST4FIRST4} | {YYYYMMDD}-UNKN-N
@@ -68,8 +70,7 @@ View creation via API not supported in this version — must use UI.
 
 ### AR Tracker fields
 - Claim (text — matches Claim Number in Claims Tracker)
-- Patient Name, Date of Service, Insurer
-- Submission Date
+- Patient Name, Date of Service, Insurer, Submission Date
 - F/U Date 1, F/U No. 1 (notes)
 - F/U Date 2, F/U No. 2 (notes)
 - F/U Date 3, F/U No. 3 (notes)
@@ -77,10 +78,10 @@ View creation via API not supported in this version — must use UI.
 - AR Status: Open | Partial | Paid | Denied | Write-Off
 - Notes (LongText)
 
-F/U dates are calculated as 7 business days apart starting from Submission Date.
-Trigger: claim in Claims Tracker changes to "Billed" → run sync-ar-tracker.cjs --apply
+F/U dates: 7 business days apart starting from Submission Date.
+Trigger: claim → "Billed" → run sync-ar-tracker.cjs --apply (runs hourly via Task Scheduler)
 
-### NocoDB users (all password: ProCare2026x — billers should change on first login)
+### NocoDB users (all initial password: ProCare2026x)
 - teran@baosurgery.com (Owner)
 - cesar@procare-solutions.net (Editor)
 - araica@procare-solutions.net (Editor)
@@ -90,68 +91,62 @@ Trigger: claim in Claims Tracker changes to "Billed" → run sync-ar-tracker.cjs
 
 ### NocoDB views in Claims Tracker
 - General Overview (default, all records)
-- Salvador, Alejandro, Cesar, Joseling, Eduardo (filtered by Owner, Status != Done)
+- Salvador, Alejandro, Cesar, Joseling, Eduardo (filtered by Owner)
 - Unclaimed (Owner = Unclaimed)
-- Sent (Submission Status = Sent)
-
-## Airtable (legacy — being phased out)
-- Base: appbB5puT1FyWGd5E
-- Claims: tblZiyYJQEfLiMEfz
-- A/R: tbleuFZMh6LRCGBNp
-- PAT: (rotated — do not commit)
+- Sent (filter may need update to Pending after status rename)
 
 ## DaisyBill
 - API base: https://go.daisybill.com/api/v1
-- API key (rotate if shared): Eew9UBykTwEqVD9qhBKPccRScrRF9L1zo9Lx
+- API key: in nocodb-config.json (NOT committed)
 - Billing provider ID: 4204
 - Pagination: ?page=N, page_size=25 (break when items < 25)
-- Bill → Injury: bill.links[].find(rel='injury').href → injury.claim_number + injury.links[].find(rel='patient').href
+- Bill → Injury: bill.links[].find(rel='injury').href → injury.claim_number
 - Note: DaisyBill refused to sign a BAA (documented in writing)
 
 ## DrChrono
 - Practice: jennyyudpm.drchrono.com
 - Doctor ID: 245533
-- OAuth config: drchrono-config.json (client_id/secret/redirect_uri)
-- Tokens: drchrono-tokens.json (48h expiry; auto-refreshed in all scripts)
-- Key endpoints used:
-  - GET /api/patients?chart_id={mrn}&doctor=245533 → find patient by MRN
-  - GET /api/patients?last_name=X&first_name=Y&doctor=245533 → find by name
-  - GET /api/appointments?patient={id}&date={dos} → find appointment
-  - GET /api/line_items?appointment={id} → existing CPT codes
-  - POST /api/line_items → add CPT code to appointment
+- OAuth config: drchrono-config.json (NOT committed)
+- Tokens: drchrono-tokens.json (NOT committed — 48h expiry, auto-refreshed)
+- Key endpoints:
+  - GET /api/patients?chart_id={mrn}&doctor=245533
+  - GET /api/appointments?patient={id}&date={dos}
+  - GET /api/line_items?appointment={id}
+  - POST /api/line_items → add CPT code
   - PATCH /api/appointments/{id} → update icd10_codes
-  - GET /api/insurances?patient={id} → patient insurance
+  - GET /api/insurances?patient={id}
 
 ## Claim number format
-{YYYYMMDD}-{MRN}          — came from DrChrono (chart_id exists)
-{YYYYMMDD}-{LAST4FIRST4}  — manual entry, no MRN (last4+first4 of patient name)
-{YYYYMMDD}-UNKN-N         — no patient name either
-Duplicates on same key get suffix -1, -2, -3...
+{YYYYMMDD}-{MRN}          — from DrChrono (chart_id exists)
+{YYYYMMDD}-{LAST4FIRST4}  — manual entry, no MRN
+{YYYYMMDD}-UNKN-N         — no patient name
+Duplicates get suffix: -1, -2, -3...
 
 ## Infrastructure
 - Server: DigitalOcean droplet 137.184.211.133 (ubuntu-s-1vcpu-2gb-nyc1)
 - Docker containers: nocodb_nocodb_1, nocodb_postgres_1, caddy, synapse, livekit
-- NocoDB DB: PostgreSQL (not SQLite). Credentials: user=nocodb, pass=nocodb_pass_2026, db=nocodb, host=postgres:5432
-- Caddy config: /opt/caddy/Caddyfile — reload with: docker exec caddy caddy reload --config /etc/caddy/Caddyfile
-- To reset a user password via DB: use heredoc to avoid $ expansion issues (see Key decisions)
+- NocoDB DB: PostgreSQL. Credentials: user=nocodb, pass=nocodb_pass_2026, db=nocodb
+- Caddy config: /opt/caddy/Caddyfile — reload: docker exec caddy caddy reload --config /etc/caddy/Caddyfile
+- Element/Matrix: chat.procare-solutions.net (synapse container, same server)
+  - "Billing Notification" room for daily/automated alerts
 
-## Key decisions made
-- NocoDB v2 API (NOT v1) — server is v2026.06.2
+## Key technical decisions
+- NocoDB v2 API (NOT v1) for all data operations
 - Bulk PATCH: PATCH /api/v2/tables/{tableId}/records with array of {Id, ...fields}
-- SingleSelect options must be pre-created (PATCH column meta before inserting new values)
-- DrChrono tokens refresh automatically; re-run drchrono-auth.cjs only if refresh_token fails
-- process.cjs and watch.cjs still write to Airtable (migration pending)
-- DaisyBill: links field is an ARRAY [{rel, href}], not an object — use .find(l=>l.rel==='injury')
+- SingleSelect options must be pre-created before inserting new values
+- DrChrono tokens auto-refresh; re-run drchrono-auth.cjs only if refresh_token fails
 - Password resets via psql must use heredoc << 'SQL' to avoid bash expanding $ in bcrypt hashes
 - NocoDB view creation via API returns 404 — create views manually in UI
 
 ## What's still pending
-- [ ] Switch watch.cjs + process.cjs to write NocoDB instead of Airtable
+- [ ] Daily Element notification: unclaimed DOS count, billed yesterday, new cases last 24h
+- [ ] Switch watch.cjs to write NocoDB instead of Airtable (Airtable fully phased out)
 - [ ] Task Scheduler: auto-start watch.cjs on Windows boot
 - [ ] Run drchrono-billing-push.cjs --apply for full DrChrono backfill
 - [ ] Sign DigitalOcean BAA (HIPAA)
-- [ ] Balance Due calculation logic in AR Tracker (TBD)
-- [ ] billing.procare-solutions.net DNS propagation — verify HTTPS works
+- [ ] Balance Due calculation logic in AR Tracker
+- [ ] Billers should change password ProCare2026x on first login
+- [ ] Rotate Airtable PAT (was hardcoded in old scripts before cleanup)
 ```
 
 ---
@@ -162,8 +157,8 @@ Duplicates on same key get suffix -1, -2, -3...
 # Refresh DrChrono tokens (if expired)
 node drchrono-auth.cjs
 
-# Pull new DrChrono appointments into NocoDB
-node nocodb/drchrono-sync-nc.cjs 2026-07-01 2026-07-07
+# Pull today's DrChrono appointments into NocoDB
+node nocodb/drchrono-sync-nc.cjs 2026-07-14 2026-07-14
 
 # Push CPT/ICD-10 from NocoDB into DrChrono (dry run first)
 node nocodb/drchrono-billing-push.cjs
@@ -172,7 +167,7 @@ node nocodb/drchrono-billing-push.cjs --apply
 # Sync DaisyBill submitted claims → NocoDB
 node nocodb/daisybill-sync-nc.cjs --apply
 
-# Sync Billed claims → AR Tracker (run after billers mark claims as Billed)
+# Sync Billed claims → AR Tracker
 node nocodb/sync-ar-tracker.cjs
 node nocodb/sync-ar-tracker.cjs --apply
 
@@ -183,7 +178,7 @@ node nocodb/backfill-dob.cjs --apply
 node nocodb/renumber-claims.cjs --apply
 ```
 
-## Architecture diagram
+## Architecture
 
 ```
 DrChrono (EHR)
@@ -196,12 +191,12 @@ DrChrono (EHR)
                                                         │
 DaisyBill (WC billing)       daisybill-sync-nc.cjs     │
   /api/v1/bills      ────────────────────────────────► │
-  marks claims Billed                                   │
-                                                        │ sync-ar-tracker.cjs
+  dedup check on pull                                   │
+                                                        │ sync-ar-tracker.cjs (hourly)
                                                         ▼
                                                NocoDB AR Tracker
-                                               (F/U dates, Balance Due)
+                                               (F/U dates, AR Status)
                                                         │
-                                                 Billers work queue
-                                                 (views by Owner)
+                                                 Billers work queue        Element
+                                                 (views by Owner)   ──►  "Billing Notification"
 ```
