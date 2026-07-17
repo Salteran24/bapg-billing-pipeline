@@ -88,8 +88,12 @@ async function main() {
       const patientId = patientHref.split('/').pop();
       const name = await getPatientName(patientId);
       const key = `${norm(name)}|${bill.date_of_service}`;
+      const chargeCents = bill.charge_cents || 0;
       if (!dbLookup.has(key)) {
-        dbLookup.set(key, { name, dos: bill.date_of_service, status: bill.status, statusUpdated: bill.status_updated_at });
+        dbLookup.set(key, { name, dos: bill.date_of_service, status: bill.status, statusUpdated: bill.status_updated_at, chargeCents });
+      } else {
+        // multiple bills for same patient+DOS (e.g. two body parts): sum charges
+        dbLookup.get(key).chargeCents += chargeCents;
       }
       resolved++;
     } catch { failed++; await sleep(200); }
@@ -104,30 +108,40 @@ async function main() {
   const updates = [];
   for (const row of claims) {
     const sub = (row['Submission Status'] || '').toLowerCase();
-    if (sub === 'billed' || sub === 'canceled') continue;
+    if (sub === 'canceled') continue;
     const name = row['Patient Name'];
     const dos  = row['Date of Service'];
     if (!name || !dos) continue;
     const key = `${norm(name)}|${dos}`;
     const match = dbLookup.get(key);
-    if (match) {
-      console.log(`  ✓ ${row['Claim Number']} | ${name} | ${dos}`);
-      updates.push({
-        Id: row.Id,
-        'Submission Status': 'Billed',
-        ...(match.statusUpdated ? { 'Submission Date': match.statusUpdated.slice(0, 10) } : {}),
-      });
+    if (!match) continue;
+
+    const dbCharge = match.chargeCents ? Math.round(match.chargeCents) / 100 : null;
+    const patch = {};
+    if (sub !== 'billed') {
+      patch['Submission Status'] = 'Billed';
+      if (match.statusUpdated) patch['Submission Date'] = match.statusUpdated.slice(0, 10);
     }
+    if (dbCharge && Number(row['Charges'] || 0) !== dbCharge) {
+      patch['Charges'] = dbCharge;
+    }
+    if (row['Billing Platform'] !== 'DaisyBill') {
+      patch['Billing Platform'] = 'DaisyBill';
+    }
+    if (!Object.keys(patch).length) continue;
+
+    console.log(`  ✓ ${row['Claim Number']} | ${name} | ${dos}${patch['Charges'] ? ` | $${dbCharge.toFixed(2)}` : ''}`);
+    updates.push({ Id: row.Id, ...patch });
   }
 
-  console.log(`\n${updates.length} claims to mark as "Billed"`);
+  console.log(`\n${updates.length} claims to update (status and/or charges)`);
   if (!updates.length || DRY_RUN) {
     console.log(DRY_RUN ? 'Dry run done — re-run with --apply to write.' : 'Nothing to update.');
     return;
   }
 
   await nc.updateBatch(nc.CLAIMS, updates);
-  console.log(`✅ Done — ${updates.length} claims marked as "Billed"`);
+  console.log(`✅ Done — ${updates.length} claims updated`);
 }
 
 main().catch(e => { console.error('\n❌', e.message); process.exit(1); });
