@@ -122,7 +122,7 @@ async function main() {
     keyCount[base] = (keyCount[base] || 0) + 1;
   }
 
-  const claimsToCreate = [], arToCreate = [];
+  const claimsToCreate = [];
   for (const d of apptData) {
     const base = d.dosCompact && d.mrn ? `${d.dosCompact}-${d.mrn}` : d.dosCompact || d.mrn || d.apptId;
     keyUsed[base] = (keyUsed[base] || 0) + 1;
@@ -155,20 +155,12 @@ async function main() {
       'Submission Status':'Not Started',
       'Owner':            'Unclaimed',
     });
-
-    arToCreate.push({
-      'Claim':           claimNum,
-      'Insurer':         'Self-Pay',
-      'Date of Service': d.dos || null,
-      'A/R Status':      'Open',
-    });
   }
+  // AR Tracker rows are NOT created here — sync-ar-tracker.cjs creates them
+  // (with F/U dates) only when a claim reaches "Billed".
 
   console.log(`\nCreating ${claimsToCreate.length} claims in NocoDB...`);
   await nc.createBatch(nc.CLAIMS, claimsToCreate);
-
-  console.log(`Creating ${arToCreate.length} A/R rows...`);
-  await nc.createBatch(nc.AR, arToCreate);
 
   console.log(`\n✅ Done — ${claimsToCreate.length} claims imported from DrChrono`);
 
