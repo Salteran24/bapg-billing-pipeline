@@ -61,8 +61,11 @@ async function main() {
   const config = loadConfig();
   let tokens = await refreshIfNeeded(loadTokens(), config);
 
+  // Default window: 30 days back. PCAs backdate reports — an encounter seen
+  // today may be entered as an appointment dated 2-4 weeks in the past, so a
+  // short window would miss it. Dedup by DrChrono Appt ID makes re-scanning safe.
   const today = new Date();
-  const fromDate = process.argv[2] || new Date(today - 7 * 86400000).toISOString().slice(0, 10);
+  const fromDate = process.argv[2] || new Date(today - 30 * 86400000).toISOString().slice(0, 10);
   const toDate   = process.argv[3] || today.toISOString().slice(0, 10);
 
   console.log(`Syncing DrChrono appointments ${fromDate} → ${toDate}`);
