@@ -64,16 +64,20 @@ async function main() {
   const sentBills = bills.filter(b => SENT_STATUSES.has(b.status));
   const patientCache = {};
 
-  async function getPatientName(patientId) {
+  async function getPatient(patientId) {
     if (patientCache[patientId]) return patientCache[patientId];
     const p = await dbGet(`/patients/${patientId}`);
-    const name = `${p.first_name || ''} ${p.last_name || ''}`.trim();
-    patientCache[patientId] = name;
-    return name;
+    const info = {
+      name: `${p.first_name || ''} ${p.last_name || ''}`.trim(),
+      dob:  p.date_of_birth || null,
+    };
+    patientCache[patientId] = info;
+    return info;
   }
 
   console.log('Resolving patient names...');
-  const dbLookup = new Map();
+  const dbLookup   = new Map(); // norm(name)|dos → bill info
+  const dbByDobDos = new Map(); // dob|dos → bill info, or 'AMBIGUOUS' on collision
   let resolved = 0, failed = 0;
 
   for (let i = 0; i < sentBills.length; i++) {
@@ -86,14 +90,25 @@ async function main() {
       const patientHref = injury.links?.find(l => l.rel === 'patient')?.href;
       if (!patientHref) { failed++; continue; }
       const patientId = patientHref.split('/').pop();
-      const name = await getPatientName(patientId);
+      const { name, dob } = await getPatient(patientId);
       const key = `${norm(name)}|${bill.date_of_service}`;
       const chargeCents = bill.charge_cents || 0;
+      let info;
       if (!dbLookup.has(key)) {
-        dbLookup.set(key, { name, dos: bill.date_of_service, status: bill.status, statusUpdated: bill.status_updated_at, chargeCents });
+        info = { name, dob, dos: bill.date_of_service, status: bill.status, statusUpdated: bill.status_updated_at, chargeCents };
+        dbLookup.set(key, info);
       } else {
         // multiple bills for same patient+DOS (e.g. two body parts): sum charges
-        dbLookup.get(key).chargeCents += chargeCents;
+        info = dbLookup.get(key);
+        info.chargeCents += chargeCents;
+      }
+      // fallback index: DOB + DOS. If two DIFFERENT patients share it, mark
+      // ambiguous so we never guess wrong.
+      if (dob) {
+        const dKey = `${dob}|${bill.date_of_service}`;
+        const prev = dbByDobDos.get(dKey);
+        if (prev === undefined) dbByDobDos.set(dKey, info);
+        else if (prev !== 'AMBIGUOUS' && prev !== info) dbByDobDos.set(dKey, 'AMBIGUOUS');
       }
       resolved++;
     } catch { failed++; await sleep(200); }
@@ -113,7 +128,16 @@ async function main() {
     const dos  = row['Date of Service'];
     if (!name || !dos) continue;
     const key = `${norm(name)}|${dos}`;
-    const match = dbLookup.get(key);
+    let match = dbLookup.get(key);
+    let via = 'name';
+    if (!match) {
+      // fallback: DOB + DOS (immune to name annotations/typos)
+      const dob = (row['Date of Birth'] || '').slice(0, 10);
+      if (dob) {
+        const m = dbByDobDos.get(`${dob}|${dos}`);
+        if (m && m !== 'AMBIGUOUS') { match = m; via = 'dob'; }
+      }
+    }
     if (!match) continue;
 
     const dbCharge = match.chargeCents ? Math.round(match.chargeCents) / 100 : null;
@@ -130,7 +154,7 @@ async function main() {
     }
     if (!Object.keys(patch).length) continue;
 
-    console.log(`  ✓ ${row['Claim Number']} | ${name} | ${dos}${patch['Charges'] ? ` | $${dbCharge.toFixed(2)}` : ''}`);
+    console.log(`  ✓ ${row['Claim Number']} | ${name} | ${dos}${via === 'dob' ? ` [via DOB → ${match.name}]` : ''}${patch['Charges'] ? ` | $${dbCharge.toFixed(2)}` : ''}`);
     updates.push({ Id: row.Id, ...patch });
   }
 
